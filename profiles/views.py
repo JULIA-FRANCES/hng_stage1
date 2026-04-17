@@ -52,9 +52,14 @@ def format_profile_list(profile):
     }
 
 
-    
 @api_view(["GET", "DELETE"])
 def profile_detail(request, pk):
+    import uuid
+    try:
+        uuid.UUID(str(pk))
+    except ValueError:
+        return error_response("Profile not found.", status.HTTP_404_NOT_FOUND)
+
     try:
         profile = Profile.objects.get(pk=pk)
     except Profile.DoesNotExist:
