@@ -19,3 +19,5 @@ https://hngstage1-production-f968.up.railway.app
 - Django REST Framework
 - PostgreSQL (Supabase)
 - Deployed on Railway
+
+Passed Stage 1
