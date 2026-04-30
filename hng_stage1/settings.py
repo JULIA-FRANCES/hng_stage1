@@ -51,6 +51,15 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'authentication.backends.JWTAuthentication',
     ],
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/minute',
+        'user': '60/minute',
+        'auth': '10/minute',
+    }
 }
 
 STATIC_ROOT = BASE_DIR / "staticfiles"
@@ -65,14 +74,8 @@ GITHUB_REDIRECT_URI = config("GITHUB_REDIRECT_URI", default="http://localhost:80
 ACCESS_TOKEN_EXPIRY = config("ACCESS_TOKEN_EXPIRY", default=180, cast=int)
 REFRESH_TOKEN_EXPIRY = config("REFRESH_TOKEN_EXPIRY", default=300, cast=int)
 
-REST_FRAMEWORK = {
-    'DEFAULT_THROTTLE_CLASSES': [
-        'rest_framework.throttling.AnonRateThrottle',
-        'rest_framework.throttling.UserRateThrottle',
-    ],
-    'DEFAULT_THROTTLE_RATES': {
-        'anon': '60/minute',
-        'user': '60/minute',
-        'auth': '10/minute',
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
     }
 }

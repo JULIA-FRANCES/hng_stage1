@@ -75,7 +75,6 @@ def github_login(request):
     
     return HttpResponseRedirect(github_url)
 
-
 @api_view(["GET"])
 @authentication_classes([])
 @permission_classes([AllowAny])
@@ -84,19 +83,26 @@ def github_callback(request):
     """Handle GitHub OAuth callback"""
     code = request.GET.get('code')
     error = request.GET.get('error')
-    
+    state = request.GET.get('state')
+
+    if not state:
+        return Response(
+            {"status": "error", "message": "Missing state parameter"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
     if error:
         return Response(
             {"status": "error", "message": "GitHub OAuth failed"},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     if not code:
         return Response(
             {"status": "error", "message": "No code provided"},
             status=status.HTTP_400_BAD_REQUEST
         )
-    
+
     code_verifier = request.GET.get('code_verifier', '')
     redirect_uri = request.GET.get('redirect_uri', settings.GITHUB_REDIRECT_URI)
 
