@@ -1,11 +1,15 @@
+import csv
 import requests
 from datetime import datetime, timezone
 
-from rest_framework.decorators import api_view
+from django.http import HttpResponse
+from rest_framework.decorators import api_view, authentication_classes, permission_classes
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import AllowAny
 
 from .models import Profile
+from authentication.backends import JWTAuthentication
 
 
 def error_response(message, http_status):
@@ -13,6 +17,14 @@ def error_response(message, http_status):
         {"status": "error", "message": message},
         status=http_status,
     )
+
+
+def check_api_version(request):
+    """Check X-API-Version header"""
+    version = request.headers.get('X-API-Version')
+    if not version:
+        return False
+    return True
 
 
 def get_age_group(age):
@@ -32,7 +44,6 @@ def format_profile(profile):
         "name": profile.name,
         "gender": profile.gender,
         "gender_probability": profile.gender_probability,
-        "sample_size": profile.sample_size,
         "age": profile.age,
         "age_group": profile.age_group,
         "country_id": profile.country_id,
@@ -57,18 +68,101 @@ def format_profile_list(profile):
     }
 
 
+def build_pagination_links(request, page, limit, total):
+    """Build pagination links"""
+    base_url = request.path
+    params = request.GET.copy()
+
+    # Self link
+    params['page'] = page
+    params['limit'] = limit
+    self_link = f"{base_url}?{params.urlencode()}"
+
+    # Next link
+    total_pages = (total + limit - 1) // limit
+    if page < total_pages:
+        params['page'] = page + 1
+        next_link = f"{base_url}?{params.urlencode()}"
+    else:
+        next_link = None
+
+    # Prev link
+    if page > 1:
+        params['page'] = page - 1
+        prev_link = f"{base_url}?{params.urlencode()}"
+    else:
+        prev_link = None
+
+    return self_link, next_link, prev_link, total_pages
+
+
+def apply_filters(queryset, request):
+    """Apply filters to queryset"""
+    gender = request.query_params.get("gender")
+    country_id = request.query_params.get("country_id")
+    age_group = request.query_params.get("age_group")
+    min_age = request.query_params.get("min_age")
+    max_age = request.query_params.get("max_age")
+    min_gender_probability = request.query_params.get("min_gender_probability")
+    min_country_probability = request.query_params.get("min_country_probability")
+
+    if gender:
+        queryset = queryset.filter(gender__iexact=gender)
+    if country_id:
+        queryset = queryset.filter(country_id__iexact=country_id)
+    if age_group:
+        queryset = queryset.filter(age_group__iexact=age_group)
+    if min_age:
+        try:
+            queryset = queryset.filter(age__gte=int(min_age))
+        except ValueError:
+            return None, "Invalid query parameters"
+    if max_age:
+        try:
+            queryset = queryset.filter(age__lte=int(max_age))
+        except ValueError:
+            return None, "Invalid query parameters"
+    if min_gender_probability:
+        try:
+            queryset = queryset.filter(gender_probability__gte=float(min_gender_probability))
+        except ValueError:
+            return None, "Invalid query parameters"
+    if min_country_probability:
+        try:
+            queryset = queryset.filter(country_probability__gte=float(min_country_probability))
+        except ValueError:
+            return None, "Invalid query parameters"
+
+    return queryset, None
+
+
+def apply_sorting(queryset, request):
+    """Apply sorting to queryset"""
+    sort_by = request.query_params.get("sort_by")
+    order = request.query_params.get("order", "asc")
+    valid_sort_fields = ["age", "created_at", "gender_probability"]
+
+    if sort_by:
+        if sort_by not in valid_sort_fields:
+            return None, "Invalid query parameters"
+        if order == "desc":
+            queryset = queryset.order_by(f"-{sort_by}")
+        else:
+            queryset = queryset.order_by(sort_by)
+
+    return queryset, None
+
+
 def parse_natural_language(query):
     """Rule-based natural language parser — no AI/LLMs used."""
     query = query.lower().strip()
     filters = {}
 
-    # Gender
     if "female" in query or "females" in query:
         filters["gender"] = "female"
     elif "male" in query or "males" in query:
         filters["gender"] = "male"
 
-    # Age groups
     if "young" in query:
         filters["min_age"] = 16
         filters["max_age"] = 24
@@ -81,7 +175,6 @@ def parse_natural_language(query):
     elif "adult" in query or "adults" in query:
         filters["age_group"] = "adult"
 
-    # Above/below age
     import re
     above_match = re.search(r'above\s+(\d+)', query)
     below_match = re.search(r'below\s+(\d+)', query)
@@ -97,7 +190,6 @@ def parse_natural_language(query):
     if younger_match:
         filters["max_age"] = int(younger_match.group(1))
 
-    # Country mapping
     country_map = {
         "nigeria": "NG", "ghana": "GH", "kenya": "KE",
         "tanzania": "TZ", "uganda": "UG", "ethiopia": "ET",
@@ -124,6 +216,10 @@ def parse_natural_language(query):
 
 @api_view(["GET", "DELETE"])
 def profile_detail(request, pk):
+    """Get or delete a single profile"""
+    if not check_api_version(request):
+        return error_response("API version header required", status.HTTP_400_BAD_REQUEST)
+
     import uuid
     try:
         uuid.UUID(str(pk))
@@ -142,12 +238,19 @@ def profile_detail(request, pk):
         )
 
     if request.method == "DELETE":
+        # Admin only
+        if request.user.role != 'admin':
+            return error_response("Admin access required", status.HTTP_403_FORBIDDEN)
         profile.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @api_view(["GET"])
 def profile_search(request):
+    """Natural language search"""
+    if not check_api_version(request):
+        return error_response("API version header required", status.HTTP_400_BAD_REQUEST)
+
     query = request.query_params.get("q", "").strip()
 
     if not query:
@@ -174,7 +277,6 @@ def profile_search(request):
     if "max_age" in filters:
         queryset = queryset.filter(age__lte=filters["max_age"])
 
-    # Pagination
     try:
         page = max(1, int(request.query_params.get("page", 1)))
         limit = min(50, max(1, int(request.query_params.get("limit", 10))))
@@ -182,6 +284,7 @@ def profile_search(request):
         return error_response("Invalid query parameters", status.HTTP_400_BAD_REQUEST)
 
     total = queryset.count()
+    self_link, next_link, prev_link, total_pages = build_pagination_links(request, page, limit, total)
     start = (page - 1) * limit
     end = start + limit
     queryset = queryset[start:end]
@@ -192,67 +295,83 @@ def profile_search(request):
             "page": page,
             "limit": limit,
             "total": total,
+            "total_pages": total_pages,
+            "links": {
+                "self": self_link,
+                "next": next_link,
+                "prev": prev_link,
+            },
             "data": [format_profile_list(p) for p in queryset],
         },
         status=status.HTTP_200_OK,
     )
 
 
+@api_view(["GET"])
+def profile_export(request):
+    """Export profiles as CSV"""
+    if not check_api_version(request):
+        return error_response("API version header required", status.HTTP_400_BAD_REQUEST)
+
+    queryset = Profile.objects.all()
+
+    # Apply same filters as GET /api/profiles
+    queryset, error = apply_filters(queryset, request)
+    if error:
+        return error_response(error, status.HTTP_400_BAD_REQUEST)
+
+    queryset, error = apply_sorting(queryset, request)
+    if error:
+        return error_response(error, status.HTTP_400_BAD_REQUEST)
+
+    # Generate CSV
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    filename = f"profiles_{timestamp}.csv"
+
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+
+    writer = csv.writer(response)
+    writer.writerow([
+        'id', 'name', 'gender', 'gender_probability',
+        'age', 'age_group', 'country_id', 'country_name',
+        'country_probability', 'created_at'
+    ])
+
+    for profile in queryset:
+        writer.writerow([
+            str(profile.id),
+            profile.name,
+            profile.gender,
+            profile.gender_probability,
+            profile.age,
+            profile.age_group,
+            profile.country_id,
+            profile.country_name,
+            profile.country_probability,
+            profile.created_at.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        ])
+
+    return response
+
+
 @api_view(["GET", "POST"])
 def profiles_router(request):
+    """Get all profiles or create a new one"""
+    if not check_api_version(request):
+        return error_response("API version header required", status.HTTP_400_BAD_REQUEST)
+
     if request.method == "GET":
         queryset = Profile.objects.all()
 
-        # Filters
-        gender = request.query_params.get("gender")
-        country_id = request.query_params.get("country_id")
-        age_group = request.query_params.get("age_group")
-        min_age = request.query_params.get("min_age")
-        max_age = request.query_params.get("max_age")
-        min_gender_probability = request.query_params.get("min_gender_probability")
-        min_country_probability = request.query_params.get("min_country_probability")
+        queryset, error = apply_filters(queryset, request)
+        if error:
+            return error_response(error, status.HTTP_400_BAD_REQUEST)
 
-        if gender:
-            queryset = queryset.filter(gender__iexact=gender)
-        if country_id:
-            queryset = queryset.filter(country_id__iexact=country_id)
-        if age_group:
-            queryset = queryset.filter(age_group__iexact=age_group)
-        if min_age:
-            try:
-                queryset = queryset.filter(age__gte=int(min_age))
-            except ValueError:
-                return error_response("Invalid query parameters", status.HTTP_400_BAD_REQUEST)
-        if max_age:
-            try:
-                queryset = queryset.filter(age__lte=int(max_age))
-            except ValueError:
-                return error_response("Invalid query parameters", status.HTTP_400_BAD_REQUEST)
-        if min_gender_probability:
-            try:
-                queryset = queryset.filter(gender_probability__gte=float(min_gender_probability))
-            except ValueError:
-                return error_response("Invalid query parameters", status.HTTP_400_BAD_REQUEST)
-        if min_country_probability:
-            try:
-                queryset = queryset.filter(country_probability__gte=float(min_country_probability))
-            except ValueError:
-                return error_response("Invalid query parameters", status.HTTP_400_BAD_REQUEST)
+        queryset, error = apply_sorting(queryset, request)
+        if error:
+            return error_response(error, status.HTTP_400_BAD_REQUEST)
 
-        # Sorting
-        sort_by = request.query_params.get("sort_by")
-        order = request.query_params.get("order", "asc")
-        valid_sort_fields = ["age", "created_at", "gender_probability"]
-
-        if sort_by:
-            if sort_by not in valid_sort_fields:
-                return error_response("Invalid query parameters", status.HTTP_400_BAD_REQUEST)
-            if order == "desc":
-                queryset = queryset.order_by(f"-{sort_by}")
-            else:
-                queryset = queryset.order_by(sort_by)
-
-        # Pagination
         try:
             page = max(1, int(request.query_params.get("page", 1)))
             limit = min(50, max(1, int(request.query_params.get("limit", 10))))
@@ -260,6 +379,9 @@ def profiles_router(request):
             return error_response("Invalid query parameters", status.HTTP_400_BAD_REQUEST)
 
         total = queryset.count()
+        self_link, next_link, prev_link, total_pages = build_pagination_links(
+            request, page, limit, total
+        )
         start = (page - 1) * limit
         end = start + limit
         paginated = queryset[start:end]
@@ -270,12 +392,22 @@ def profiles_router(request):
                 "page": page,
                 "limit": limit,
                 "total": total,
+                "total_pages": total_pages,
+                "links": {
+                    "self": self_link,
+                    "next": next_link,
+                    "prev": prev_link,
+                },
                 "data": [format_profile_list(p) for p in paginated],
             },
             status=status.HTTP_200_OK,
         )
 
     elif request.method == "POST":
+        # Admin only
+        if request.user.role != 'admin':
+            return error_response("Admin access required", status.HTTP_403_FORBIDDEN)
+
         name = request.data.get("name", None)
 
         if name is None or name == "":

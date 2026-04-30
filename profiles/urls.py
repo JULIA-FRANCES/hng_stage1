@@ -4,6 +4,8 @@ from profiles import views
 urlpatterns = [
     path('api/profiles/search', views.profile_search),
     path('api/profiles/search/', views.profile_search),
+    path('api/profiles/export', views.profile_export),
+    path('api/profiles/export/', views.profile_export),
     path('api/profiles', views.profiles_router),
     path('api/profiles/', views.profiles_router),
     path('api/profiles/<str:pk>', views.profile_detail),

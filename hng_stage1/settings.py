@@ -1,5 +1,6 @@
 from pathlib import Path
 from decouple import config
+from datetime import timedelta
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -13,11 +14,13 @@ INSTALLED_APPS = [
     'rest_framework',
     'corsheaders',
     'profiles.apps.ProfilesConfig',
+    'authentication',
 ]
 
 MIDDLEWARE = [
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.common.CommonMiddleware',
+    'authentication.middleware.RequestLoggingMiddleware',
 ]
 
 ROOT_URLCONF = 'hng_stage1.urls'
@@ -44,8 +47,20 @@ CORS_URLS_REGEX = r'^.*$'
 REST_FRAMEWORK = {
     'DEFAULT_RENDERER_CLASSES': [
         'rest_framework.renderers.JSONRenderer',
-    ]
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'authentication.backends.JWTAuthentication',
+    ],
 }
 
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATIC_URL = "/static/"
+
+# GitHub OAuth
+GITHUB_CLIENT_ID = config("GITHUB_CLIENT_ID")
+GITHUB_CLIENT_SECRET = config("GITHUB_CLIENT_SECRET")
+GITHUB_REDIRECT_URI = config("GITHUB_REDIRECT_URI", default="http://localhost:8000/auth/github/callback")
+
+# Token expiry
+ACCESS_TOKEN_EXPIRY = config("ACCESS_TOKEN_EXPIRY", default=180, cast=int)
+REFRESH_TOKEN_EXPIRY = config("REFRESH_TOKEN_EXPIRY", default=300, cast=int)
