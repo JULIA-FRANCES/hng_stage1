@@ -64,3 +64,15 @@ GITHUB_REDIRECT_URI = config("GITHUB_REDIRECT_URI", default="http://localhost:80
 # Token expiry
 ACCESS_TOKEN_EXPIRY = config("ACCESS_TOKEN_EXPIRY", default=180, cast=int)
 REFRESH_TOKEN_EXPIRY = config("REFRESH_TOKEN_EXPIRY", default=300, cast=int)
+
+REST_FRAMEWORK = {
+    'DEFAULT_THROTTLE_CLASSES': [
+        'rest_framework.throttling.AnonRateThrottle',
+        'rest_framework.throttling.UserRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/minute',
+        'user': '60/minute',
+        'auth': '10/minute',
+    }
+}
