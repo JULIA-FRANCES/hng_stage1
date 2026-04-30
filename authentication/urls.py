@@ -12,4 +12,6 @@ urlpatterns = [
     path('auth/logout/', views.logout_view),
     path('auth/whoami', views.whoami_view),
     path('auth/whoami/', views.whoami_view),
+    path('api/users/me', views.users_me_view),
+    path('api/users/me/', views.users_me_view),
 ]
