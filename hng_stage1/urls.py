@@ -10,6 +10,6 @@ def handler404(request, exception):
 
 
 urlpatterns = [
-    path('', include('profiles.urls')),
     path('', include('authentication.urls')),
+    path('', include('profiles.urls')),
 ]
