@@ -5,12 +5,18 @@ from datetime import datetime, timezone, timedelta
 from django.conf import settings
 from django.http import HttpResponseRedirect
 from django.utils import timezone as django_timezone
-from rest_framework.decorators import api_view, authentication_classes, permission_classes
+from rest_framework.decorators import api_view, authentication_classes, permission_classes, throttle_classes
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
+from rest_framework.throttling import AnonRateThrottle
 
 from .models import User, RefreshToken
+
+
+class AuthRateThrottle(AnonRateThrottle):
+    rate = '10/minute'
+    scope = 'auth'
 
 
 def generate_access_token(user):
@@ -44,15 +50,14 @@ def generate_refresh_token(user):
     
     return token
 
+
 @api_view(["GET"])
 @authentication_classes([])
 @permission_classes([AllowAny])
+@throttle_classes([AuthRateThrottle])
 def github_login(request):
     client_id = settings.GITHUB_CLIENT_ID
-    
-    # Use redirect_uri from request if provided (CLI), otherwise use default (web)
     redirect_uri = request.GET.get('redirect_uri', settings.GITHUB_REDIRECT_URI)
-    
     code_challenge = request.GET.get('code_challenge', '')
     code_challenge_method = request.GET.get('code_challenge_method', '')
     state = request.GET.get('state', str(uuid.uuid4()))
@@ -74,6 +79,7 @@ def github_login(request):
 @api_view(["GET"])
 @authentication_classes([])
 @permission_classes([AllowAny])
+@throttle_classes([AuthRateThrottle])
 def github_callback(request):
     """Handle GitHub OAuth callback"""
     code = request.GET.get('code')
@@ -91,9 +97,6 @@ def github_callback(request):
             status=status.HTTP_400_BAD_REQUEST
         )
     
-    # Exchange code for access token
-    
-    # Exchange code for access token
     code_verifier = request.GET.get('code_verifier', '')
     redirect_uri = request.GET.get('redirect_uri', settings.GITHUB_REDIRECT_URI)
 
@@ -128,7 +131,6 @@ def github_callback(request):
             status=status.HTTP_502_BAD_GATEWAY
         )
     
-    # Get user info from GitHub
     try:
         user_response = requests.get(
             'https://api.github.com/user',
@@ -145,7 +147,6 @@ def github_callback(request):
             status=status.HTTP_502_BAD_GATEWAY
         )
     
-    # Get email if not public
     email = github_user.get('email')
     if not email:
         try:
@@ -163,7 +164,6 @@ def github_callback(request):
         except Exception:
             email = None
     
-    # Create or update user
     user, created = User.objects.get_or_create(
         github_id=str(github_user['id']),
         defaults={
@@ -187,7 +187,6 @@ def github_callback(request):
             status=status.HTTP_403_FORBIDDEN
         )
     
-    # Generate tokens
     access_token = generate_access_token(user)
     refresh_token = generate_refresh_token(user)
     
@@ -211,6 +210,7 @@ def github_callback(request):
 @api_view(["POST"])
 @authentication_classes([])
 @permission_classes([AllowAny])
+@throttle_classes([AuthRateThrottle])
 def refresh_token_view(request):
     """Refresh access token using refresh token"""
     refresh_token = request.data.get('refresh_token')
@@ -244,7 +244,6 @@ def refresh_token_view(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
     
-    # Check token in database
     try:
         token_obj = RefreshToken.objects.get(token=refresh_token, is_used=False)
     except RefreshToken.DoesNotExist:
@@ -253,18 +252,15 @@ def refresh_token_view(request):
             status=status.HTTP_401_UNAUTHORIZED
         )
     
-    # Check expiry
     if token_obj.expires_at < django_timezone.now():
         return Response(
             {"status": "error", "message": "Refresh token has expired"},
             status=status.HTTP_401_UNAUTHORIZED
         )
     
-    # Invalidate old token
     token_obj.is_used = True
     token_obj.save()
     
-    # Get user
     try:
         user = User.objects.get(id=payload['user_id'])
     except User.DoesNotExist:
@@ -279,7 +275,6 @@ def refresh_token_view(request):
             status=status.HTTP_403_FORBIDDEN
         )
     
-    # Generate new tokens
     new_access_token = generate_access_token(user)
     new_refresh_token = generate_refresh_token(user)
     
@@ -294,6 +289,7 @@ def refresh_token_view(request):
 
 
 @api_view(["POST"])
+@throttle_classes([AuthRateThrottle])
 def logout_view(request):
     """Invalidate refresh token"""
     refresh_token = request.data.get('refresh_token')
