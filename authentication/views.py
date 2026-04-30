@@ -325,3 +325,19 @@ def whoami_view(request):
         },
         status=status.HTTP_200_OK
     )
+
+@api_view(["GET"])
+def users_me_view(request):
+    user = request.user
+    return Response({
+        "status": "success",
+        "data": {
+            "id": str(user.id),
+            "username": user.username,
+            "email": user.email,
+            "role": user.role,
+            "avatar_url": user.avatar_url,
+            "last_login_at": user.last_login_at,
+            "created_at": user.created_at,
+        }
+    }, status=status.HTTP_200_OK)

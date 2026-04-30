@@ -20,11 +20,14 @@ def error_response(message, http_status):
 
 
 def check_api_version(request):
-    """Check X-API-Version header"""
     version = request.headers.get('X-API-Version')
     if not version:
         return False
     return True
+
+
+def is_authenticated(request):
+    return request.user and hasattr(request.user, 'id') and request.user.is_active
 
 
 def get_age_group(age):
@@ -69,16 +72,13 @@ def format_profile_list(profile):
 
 
 def build_pagination_links(request, page, limit, total):
-    """Build pagination links"""
     base_url = request.path
     params = request.GET.copy()
 
-    # Self link
     params['page'] = page
     params['limit'] = limit
     self_link = f"{base_url}?{params.urlencode()}"
 
-    # Next link
     total_pages = (total + limit - 1) // limit
     if page < total_pages:
         params['page'] = page + 1
@@ -86,7 +86,6 @@ def build_pagination_links(request, page, limit, total):
     else:
         next_link = None
 
-    # Prev link
     if page > 1:
         params['page'] = page - 1
         prev_link = f"{base_url}?{params.urlencode()}"
@@ -97,7 +96,6 @@ def build_pagination_links(request, page, limit, total):
 
 
 def apply_filters(queryset, request):
-    """Apply filters to queryset"""
     gender = request.query_params.get("gender")
     country_id = request.query_params.get("country_id")
     age_group = request.query_params.get("age_group")
@@ -137,7 +135,6 @@ def apply_filters(queryset, request):
 
 
 def apply_sorting(queryset, request):
-    """Apply sorting to queryset"""
     sort_by = request.query_params.get("sort_by")
     order = request.query_params.get("order", "asc")
     valid_sort_fields = ["age", "created_at", "gender_probability"]
@@ -154,7 +151,6 @@ def apply_sorting(queryset, request):
 
 
 def parse_natural_language(query):
-    """Rule-based natural language parser — no AI/LLMs used."""
     query = query.lower().strip()
     filters = {}
 
@@ -180,6 +176,8 @@ def parse_natural_language(query):
     below_match = re.search(r'below\s+(\d+)', query)
     older_match = re.search(r'older than\s+(\d+)', query)
     younger_match = re.search(r'younger than\s+(\d+)', query)
+    over_match = re.search(r'over\s+(\d+)', query)
+    under_match = re.search(r'under\s+(\d+)', query)
 
     if above_match:
         filters["min_age"] = int(above_match.group(1))
@@ -189,6 +187,10 @@ def parse_natural_language(query):
         filters["min_age"] = int(older_match.group(1))
     if younger_match:
         filters["max_age"] = int(younger_match.group(1))
+    if over_match:
+        filters["min_age"] = int(over_match.group(1))
+    if under_match:
+        filters["max_age"] = int(under_match.group(1))
 
     country_map = {
         "nigeria": "NG", "ghana": "GH", "kenya": "KE",
@@ -216,9 +218,11 @@ def parse_natural_language(query):
 
 @api_view(["GET", "DELETE"])
 def profile_detail(request, pk):
-    """Get or delete a single profile"""
     if not check_api_version(request):
         return error_response("API version header required", status.HTTP_400_BAD_REQUEST)
+
+    if not is_authenticated(request):
+        return error_response("Authentication required", status.HTTP_401_UNAUTHORIZED)
 
     import uuid
     try:
@@ -238,7 +242,6 @@ def profile_detail(request, pk):
         )
 
     if request.method == "DELETE":
-        # Admin only
         if request.user.role != 'admin':
             return error_response("Admin access required", status.HTTP_403_FORBIDDEN)
         profile.delete()
@@ -247,9 +250,11 @@ def profile_detail(request, pk):
 
 @api_view(["GET"])
 def profile_search(request):
-    """Natural language search"""
     if not check_api_version(request):
         return error_response("API version header required", status.HTTP_400_BAD_REQUEST)
+
+    if not is_authenticated(request):
+        return error_response("Authentication required", status.HTTP_401_UNAUTHORIZED)
 
     query = request.query_params.get("q", "").strip()
 
@@ -309,13 +314,14 @@ def profile_search(request):
 
 @api_view(["GET"])
 def profile_export(request):
-    """Export profiles as CSV"""
     if not check_api_version(request):
         return error_response("API version header required", status.HTTP_400_BAD_REQUEST)
 
+    if not is_authenticated(request):
+        return error_response("Authentication required", status.HTTP_401_UNAUTHORIZED)
+
     queryset = Profile.objects.all()
 
-    # Apply same filters as GET /api/profiles
     queryset, error = apply_filters(queryset, request)
     if error:
         return error_response(error, status.HTTP_400_BAD_REQUEST)
@@ -324,7 +330,6 @@ def profile_export(request):
     if error:
         return error_response(error, status.HTTP_400_BAD_REQUEST)
 
-    # Generate CSV
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     filename = f"profiles_{timestamp}.csv"
 
@@ -357,9 +362,11 @@ def profile_export(request):
 
 @api_view(["GET", "POST"])
 def profiles_router(request):
-    """Get all profiles or create a new one"""
     if not check_api_version(request):
         return error_response("API version header required", status.HTTP_400_BAD_REQUEST)
+
+    if not is_authenticated(request):
+        return error_response("Authentication required", status.HTTP_401_UNAUTHORIZED)
 
     if request.method == "GET":
         queryset = Profile.objects.all()
@@ -404,7 +411,6 @@ def profiles_router(request):
         )
 
     elif request.method == "POST":
-        # Admin only
         if request.user.role != 'admin':
             return error_response("Admin access required", status.HTTP_403_FORBIDDEN)
 
